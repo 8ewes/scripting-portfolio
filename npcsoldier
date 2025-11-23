@@ -1,0 +1,227 @@
+--CODE FOR SOLDIER NPC THAT FOLLOWS U AND FACES U
+
+
+local combine = {}
+combine.__index = combine
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local GarbageCollector = require(ReplicatedStorage.GarbageCollector)
+local Objects = require(ReplicatedStorage.Objects)
+
+local RunService = game:GetService("RunService")
+local PathfindingService = game:GetService("PathfindingService")
+local TweenService = game:GetService("TweenService")
+local Bullet = require(ReplicatedStorage.Bullet)
+
+local bre = ReplicatedStorage:WaitForChild("BulletRE")
+
+function combine.new(char)
+	assert(char)
+	local hrp = char:WaitForChild("HumanoidRootPart") :: Part
+	local hum = char:FindFirstChildWhichIsA("Humanoid") :: Humanoid
+	local animator = hum:WaitForChild("Animator")
+	
+	local self = setmetatable({}, combine)
+	
+	self.Char = char
+	self.Hrp = hrp
+	self.Hum = hum
+	self.Animator = animator
+	
+	self.Tracks = {
+		
+	}
+	
+	self.Connections = {}
+	
+	hrp:SetNetworkOwner(nil)
+	
+	self.Alive = true
+
+	hum.Died:Connect(function()
+		self:die()
+	end)
+	
+	self.AP = {
+		AgentRadius = hrp.Size.X/2,
+		AgentHeight = hrp.Size.Y/2,
+		AgentCanJump = true,
+		AgentCanClimb = true,
+		WaypointSpacing = 4,
+		Costs = {}
+	}
+	
+	local rcp = RaycastParams.new()
+	rcp.FilterDescendantsInstances = {self.Char}
+	rcp.FilterType = Enum.RaycastFilterType.Exclude
+	
+	self.RCP = rcp
+	
+	local ao = Instance.new("AlignOrientation", self.Hrp)
+	ao.Attachment0 = self.Hrp.RootAttachment
+	ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+	ao.CFrame = CFrame.new(self.Hrp.Position)
+	ao.Responsiveness = 200
+	ao.Enabled = false
+	
+	self.AO = ao
+	
+	task.delay(2, function()
+		self:start()
+	end)
+	
+	return self
+end
+
+function combine:die()
+	self.Alive = false
+	self.Char:FindFirstChild("HumanoidRootPart"):SetNetworkOwnershipAuto()
+	print("CLEANED")
+	GarbageCollector.clean(self)
+	
+end
+
+
+
+local function waitwithtimeout(event : RBXScriptSignal, dur : number)
+	local running = coroutine.running()
+	
+	local con
+	con = event:Once(function(...)
+		if not con then
+			return
+		end
+		con:Disconnect()
+		con = nil
+		task.spawn(running, false,...)
+	end)
+	
+	task.delay(dur, function()
+		if not con then
+			return
+		end
+		con:Disconnect()
+		con = nil
+		task.spawn(running, true)
+	end)
+	
+	
+	return coroutine.yield()
+end
+
+function combine:gettarget()
+	local target = nil
+	local lastdist = 10000
+	
+	for _,char in workspace:GetDescendants() do
+		if char:FindFirstChildWhichIsA("Humanoid") and char.Name ~= self.Char.Name then
+			local dist = (char:FindFirstChild("HumanoidRootPart").Position - self.Char.HumanoidRootPart.Position).Magnitude
+			if dist < lastdist then
+				lastdist = dist
+				target = char
+			end
+		end
+	end
+	
+	return target
+end
+
+function combine:checkiftargetisclose(target)
+	local ehrp = target:FindFirstChild("HumanoidRootPart")
+
+	if (self.Hrp.Position - ehrp.Position).Magnitude <= 10 then
+		local ray2 = workspace:Raycast(self.Hrp.Position, (ehrp.Position - self.Hrp.Position).Unit * 300, self.RCP)
+		if ehrp:IsDescendantOf(ray2.Instance.Parent) or ehrp:IsDescendantOf(ray2.Instance.Parent.Parent) then
+			return true
+		end
+	end
+end
+
+function combine:computepathto(target : Model)
+	local ehrp = target:FindFirstChild("HumanoidRootPart")
+	
+	if self:checkiftargetisclose(target) then
+		return true
+	end
+	
+	local path = PathfindingService:CreatePath(self.AP)
+	
+	path:ComputeAsync(self.Hrp.Position, ehrp.Position)
+	
+	if path.Status ~= Enum.PathStatus.Success then
+		return false
+	end
+	
+	local bc = BrickColor.random()
+	for _,wp in path:GetWaypoints() do
+		local vis = Instance.new("Part", workspace)
+		vis.Material = Enum.Material.Neon
+		vis.CanCollide = false
+		vis.CanQuery = false
+		vis.CanTouch = false
+		vis.Anchored = true
+		vis.Position = wp.Position
+		vis.Size = Vector3.new(.5,.5,.5)
+		vis.BrickColor = bc
+		game.Debris:AddItem(vis, .5)
+	end
+	
+	for _,wp in path:GetWaypoints() do
+		
+		if (_ < 3 and #path:GetWaypoints() > 10) or (_ <= 1) then continue end
+		
+		
+		self.Hum:MoveTo(wp.Position)
+		if wp.Action == Enum.PathWaypointAction.Jump then
+			self.Hum.Jump = true
+		end
+		
+		local timeout = waitwithtimeout(self.Hum.MoveToFinished, 3)
+		if timeout then
+			warn("timeout")
+			break
+		end
+		--print("done moving")
+		
+		--validate
+		
+		if (ehrp.Position - path:GetWaypoints()[#path:GetWaypoints()].Position).Magnitude > 10 then
+			break
+		end
+		if not self.Alive or target:FindFirstChildWhichIsA("Humanoid").Health < 0 then break end
+	end
+	
+	
+	print("DONE")
+	
+	return true
+end
+
+
+function combine:start()
+	while self.Alive do
+		local target = self:gettarget()
+		if target then
+			local on = true
+			
+			self.AO.Enabled = true
+			
+			task.spawn(function()
+				while on do
+					self.AO.CFrame = CFrame.new(self.Hrp.Position, target:FindFirstChild("HumanoidRootPart").Position)
+					task.wait()
+				end
+			end)
+			
+			print(self:computepathto(target))
+			
+			on = false
+		else
+			self.AO.Enabled = false
+		end
+		task.wait()
+	end
+end
+
+
+return combine :: typeof(combine)
