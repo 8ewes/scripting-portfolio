@@ -1,0 +1,561 @@
+--ADMIN MODULE
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local admin = {}
+admin.Prefix = "!"
+admin.WhiteList = {
+	"8EWES",
+}
+admin.BannedDataStoreName = "Banned23"
+type Command = {
+	Function : (recipient : Player, target :string, extra : string) -> nil,
+}
+local ObjectStorage = require(ReplicatedStorage.Modules.ObjectStorage)
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local adminre = ReplicatedStorage.RemoteEvents.AdminRemoteEvent
+local DataStoreService = game:GetService("DataStoreService")
+local ds = DataStoreService:GetDataStore(admin.BannedDataStoreName)
+admin.serverbanned = {}
+local function getplayerfromname(recipient : Player, name : string)
+	name = tostring(name)
+	name = string.lower(name)
+	if name == "me" then
+		return recipient
+	elseif name == "all" then
+		return game.Players:GetPlayers()
+	elseif name == "others" then
+		local tab = {}
+		for _,plr in game.Players:GetPlayers() do
+			if plr ~= recipient then
+				table.insert(tab, plr)
+			end
+		end
+		return tab
+	end
+	local targetplr = nil
+	local mostmatched = 0
+	for _,plr in game.Players:GetPlayers() do
+		for i=1,string.len(plr.Name) do
+			if i > string.len(name) or i > string.len(plr.Name) then print("breaked because length") break end
+			local letter = string.lower(string.sub(plr.Name, i, i))
+			print(letter, string.sub(name, i, i))
+			if letter == string.sub(name, i, i) then
+				if i > mostmatched then
+					mostmatched = i
+					targetplr = plr
+				end
+			else
+				break
+			end	
+		end
+		if string.lower(plr.Name) == name then
+			return plr
+		end
+	end
+	return targetplr
+end
+local function getplayerfrombanlist(recipient : Player, name : string)
+	name = tostring(name)
+	name = string.lower(name)
+	
+	if name == "me" then
+		return recipient
+	elseif name == "all" then
+		return admin.serverbanned
+	elseif name == "others" then
+		local tab = {}
+		for _,plrname in admin.serverbanned do
+			plrname = tostring(plrname)
+			plrname = string.lower(plrname)
+			if plrname ~= string.lower(recipient.Name) then
+				table.insert(tab, plrname)
+			end
+		end
+		return tab
+	end
+	local targetplrname = nil
+	local mostmatched = 0
+	for _,plrname in admin.serverbanned do
+		plrname = string.lower(tostring(plrname))
+		for i=1,string.len(plrname) do
+			if i > string.len(name) or i > string.len(plrname) then print("breaked because length") break end
+			local letter = string.lower(string.sub(plrname, i, i))
+			if letter == string.sub(name, i, i) then
+				if i > mostmatched then
+					mostmatched = i
+					targetplrname = plrname
+				end
+			else
+				break
+			end	
+		end
+		if string.lower(plrname) == name then
+			return plrname
+		end
+	end
+	return targetplrname
+end
+local basecommandfunction = function(recipient, target, extra, cmdname)
+	if not target then return end
+	local output = getplayerfromname(recipient, target)
+	if not output then return end
+	if typeof(output) == "table" then
+		print("is table")
+		for _,plr in output do
+			admin.Commands[cmdname].Function(plr)
+		end
+	elseif output:IsA("Player") then
+		print("is player")
+		admin.Commands[cmdname].Function(output)
+	end
+end
+local function getkeyparts(plr)
+	local char = plr.Character
+	local hrp = char:WaitForChild("HumanoidRootPart")
+	local hum = char:WaitForChild("Humanoid")
+	local animator = hum:WaitForChild("Animator")
+	if not char or not hrp or not hum or not animator then return end
+	return char, hrp, hum, animator
+end
+local Jail = require(ReplicatedStorage.Modules.Jail)
+local GarbageCollector = require(ReplicatedStorage.Modules.GarbageCollector)
+admin.Commands = {
+	fly = {
+		Function = function(plr : Player)
+			adminre:FireClient(plr, "fly")
+		end,
+	},
+	unfly = {
+		Function = function(plr)
+			adminre:FireClient(plr, "unfly")
+		end,
+	},
+	ban = {
+		Function = function(plr)
+			table.insert(admin.serverbanned,plr.Name)
+			plr:Kick("You have been banned!")
+		end,
+	},
+	unban = {
+		Function = function(recipient, target, extra)
+			local function unban(plrname)
+				print(admin.serverbanned, plrname)
+				if table.find(admin.serverbanned, plrname) then
+					table.remove(admin.serverbanned, table.find(admin.serverbanned, plrname))
+				end
+			end
+			if not target then print("NO TARGET")return end
+			local output = getplayerfrombanlist(recipient,target)
+			if not output then print("NO OUTPUT",output) return end
+			if typeof(output) == "table" then
+				for _,plrname in output do
+					print("UNBANNING",plrname)
+					unban(plrname)
+				end
+			else
+				if typeof(output) == "string" then
+					print("UNBANNING",output)
+					unban(output)
+				end
+			end
+		end,
+	},
+	pban = {
+		Function = function(recipient, target, extra)
+			if not target or not game.Players:GetPlayerByUserId(target) then return end
+			target = tonumber(target) -- target is user id
+			local success,err = pcall(function()
+				ds:UpdateAsync(target, function(olddata)
+					if not olddata then
+						olddata = {Banned = false}
+					end
+					olddata.Banned = true
+					return olddata
+				end)
+			end)
+			game.Players:GetPlayerByUserId(target):Kick("You are permanently banned!")
+		end,
+	},
+	unpban = {
+		Function = function(recipient, target, extra)
+			if not target then return end
+			target = tonumber(target) -- target is user id
+			local success,err = pcall(function()
+				ds:UpdateAsync(target, function(olddata)
+					if not olddata then
+						olddata = {Banned = false}
+					end
+					olddata.Banned = false
+					return olddata
+				end)
+			end)
+		end,
+	},
+	jail = {
+		Function = function(plr)
+			local char,hrp,hum,animator = getkeyparts(plr)
+			local jailobj = Jail.new(plr)
+			jailobj.Jail.Base.Destroying:Connect(function()
+				GarbageCollector.clean(jailobj)
+			end)
+		end,
+	},
+	unjail = {
+		Function = function(plr)
+			for jail,jailobj in ObjectStorage.Jails do
+				if jailobj.Player == plr then
+					jail:Destroy()
+				end
+			end
+		end,
+	},
+	kick = {
+		Function = function(plr)
+			plr:Kick("You have been kicked!")
+		end,
+	},
+	mute = {
+		Function = function(plr)
+			adminre:FireClient(plr, "mute")
+		end,
+	},
+	unmute = {
+		Function = function(plr)
+			adminre:FireClient(plr, "unmute")
+		end,
+	}
+} :: {[string] : Command}
+function admin:Command(recipient : Player, cmdname, target, extra)
+	cmdname = string.lower(cmdname) --if not table.find(admin.WhiteList, recipient.Name) then return end
+	if admin.Commands[cmdname] then
+		if cmdname == "unban" or cmdname == "unpban" or cmdname == "pban" then
+			admin.Commands[cmdname].Function(recipient, target, extra)
+		else
+			basecommandfunction(recipient, target, extra, cmdname)
+		end
+	end
+end
+return admin
+
+
+--JAIL MODULE
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local jail = {}
+jail.__index = jail
+
+local GarbageCollector = require(ReplicatedStorage.Modules.GarbageCollector)
+local ObjectStorage = require(ReplicatedStorage.Modules.ObjectStorage)
+
+function jail.new(plr)
+	local self = setmetatable({}, jail)
+	self.Player = plr
+	
+	local jail = ReplicatedStorage.Models.Jail:Clone()
+	jail.Parent = workspace
+	jail.Base.CFrame = plr.Character.HumanoidRootPart.CFrame * CFrame.new(0,.75,0)
+	
+	plr.Character.HumanoidRootPart.CFrame = jail.Base.CFrame
+	
+	self.Jail = jail
+	
+	ObjectStorage.Jails[self.Jail] = self
+	
+	return self
+end
+
+return jail
+
+--PLAYER MODULE
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local plr = {}
+plr.__index = plr
+
+local Admin = require(ReplicatedStorage.Modules.Admin)
+local GarbageCollector = require(ReplicatedStorage.Modules.GarbageCollector)
+local ObjectStorage = require(ReplicatedStorage.Modules.ObjectStorage)
+
+local DataStoreService = game:GetService("DataStoreService")
+local bands = DataStoreService:GetDataStore(Admin.BannedDataStoreName)
+
+
+function plr:getdata()
+	local data = nil
+	local success,err = pcall(function()
+		data = bands:GetAsync(self.Player.UserId)
+	end)
+	if success and not err then
+		if not data then
+			data = {Banned = false}
+		end
+		return data
+	end
+end
+
+function plr:savedata()
+	local success,err = pcall(function()
+		bands:UpdateAsync(self.Player.UserId, function(olddata)
+			if not olddata then
+				olddata = {Banned = false}
+			end
+			olddata.Banned = self.Banned
+			return olddata
+		end)
+	end)
+	if not success or err then
+		self.Player:Kick("DATA ERROR")
+	end
+end
+
+function plr.new(player)
+	assert(player)
+	local self = setmetatable({}, plr)
+	
+	self.Player = player
+	self.Connections = {}
+	
+	if table.find(Admin.serverbanned, self.Player.Name) then
+		self.Player:Kick("You have been banned!")
+	end
+	
+	table.insert(self.Connections, self.Player.Chatted:Connect(function(msg, recipient)
+		--if not table.find(AdminModule, recipient.Name) then return end
+		if string.find(msg, Admin.Prefix, 1) then
+			local split = string.split(msg, Admin.Prefix)
+			local fullcommand = split[2]
+			local splitcommand = string.split(fullcommand, " ")
+
+			local cmdname = splitcommand[1] 
+			local target = splitcommand[2]
+			local extra = splitcommand[3]
+
+			Admin:Command(self.Player, cmdname, target, extra)
+		end
+	end))
+	self.Banned = false
+	
+	local data = self:getdata()
+	print(data)
+	if data.Banned then
+		self.Player:Kick("You are permanently banned!")
+	end
+	ObjectStorage.Players[self.Player] = self
+	
+	return self
+end
+
+return plr :: typeof(plr)
+
+--PLAYER INITIALIZER (SERVER SCRIPT)
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Player = require(ReplicatedStorage.Modules.Player)
+local ObjectStorage = require(ReplicatedStorage.Modules.ObjectStorage)
+local GarbageCollector = require(ReplicatedStorage.Modules.GarbageCollector)
+
+game.Players.PlayerAdded:Connect(function(plr)
+	Player.new(plr)
+end)
+game.Players.PlayerRemoving:Connect(function(plr)
+	if ObjectStorage.Players[plr] then
+		ObjectStorage.Players[plr]:savedata()
+		GarbageCollector.clean(ObjectStorage.Players[plr])		
+	end	
+end)
+game:BindToClose(function()
+	for _,plr in game.Players:GetPlayers() do
+		local obj = ObjectStorage.Players[plr]
+		if not obj then continue end
+		obj:savedata()
+	end
+end)
+task.spawn(function()
+	while task.wait(50) do
+		for _,plr in game.Players:GetPlayers() do
+			local obj = ObjectStorage.Players[plr]
+			if not obj then continue end
+			obj:savedata()
+		end
+	end
+end)
+
+--ADMIN CLIENT SCRIPT HANDLER
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local are = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("AdminRemoteEvent")
+
+
+local plr = game.Players.LocalPlayer
+local char = script.Parent
+local hrp = char:WaitForChild("HumanoidRootPart")
+local hum = char:WaitForChild("Humanoid")
+local animator = hum:WaitForChild("Animator")
+
+local flying = false
+local flycon = nil
+local flykeydown = false
+
+local tracks = {
+	Fly = animator:LoadAnimation(ReplicatedStorage.Animations.FlyIdle),
+	
+}
+
+local flykeysdown = {
+	A = false,
+	D = false,
+	W = false,
+	S = false,
+}
+
+local forwardvelocity = 0
+local rightvelocity = 0
+
+
+local ContextActionService = game:GetService("ContextActionService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local cam = workspace.CurrentCamera
+
+UserInputService.InputBegan:Connect(function(obj, proc)
+	if proc then return end
+
+	if obj.KeyCode == Enum.KeyCode.W then
+		flykeysdown.W = true
+	elseif obj.KeyCode == Enum.KeyCode.S then
+		flykeysdown.S = true
+	elseif obj.KeyCode == Enum.KeyCode.A then
+		flykeysdown.A = true
+	elseif obj.KeyCode == Enum.KeyCode.D then
+		flykeysdown.D = true
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(obj, proc)
+	if proc then return end
+
+	if obj.KeyCode == Enum.KeyCode.W then
+		flykeysdown.W = false
+	elseif obj.KeyCode == Enum.KeyCode.S then
+		flykeysdown.S = false
+	elseif obj.KeyCode == Enum.KeyCode.A then
+		flykeysdown.A = false
+	elseif obj.KeyCode == Enum.KeyCode.D then
+		flykeysdown.D = false
+	end
+end)
+
+function bindflykeybinds(ap : AlignPosition, ao : AlignOrientation)
+	flying = true
+	
+	tracks.Fly:Play()
+	
+	task.spawn(function()
+		while flying do
+			forwardvelocity = (flykeysdown.W and 1 or 0) + (flykeysdown.S and -1 or 0)
+			rightvelocity   = (flykeysdown.D and 1 or 0) + (flykeysdown.A and -1 or 0)
+
+			ao.CFrame = CFrame.new(hrp.Position, hrp.Position + cam.CFrame.LookVector)
+			ap.Position = hrp.Position + (hrp.CFrame.LookVector * forwardvelocity/2.5) + (hrp.CFrame.RightVector * rightvelocity/2.5)
+			task.wait()
+		end
+	end)
+	
+	
+end
+
+function unbindflykeybinds()
+	flying = false
+	flykeydown = false
+	if flycon then
+		flycon:Disconnect()
+		flycon = nil
+	end
+	
+	tracks.Fly:Stop()
+	
+	ContextActionService:UnbindAction("ForwardFly")
+	ContextActionService:UnbindAction("BackwardFly")
+	ContextActionService:UnbindAction("LeftFly")
+	ContextActionService:UnbindAction("RightFly")
+	
+	for _,v in char:GetDescendants() do
+		if v.Name == "Fly" then
+			v:Destroy()	
+		end
+	end	
+end
+local StarterGui = game:GetService("StarterGui")
+
+are.OnClientEvent:Connect(function(...)
+	local info = {...}
+	
+	
+	if info[1] == "fly" then
+		local ap = Instance.new("AlignPosition", hrp)
+		ap.Attachment0 = hrp.RootAttachment
+		ap.Mode = Enum.PositionAlignmentMode.OneAttachment
+		ap.RigidityEnabled = true
+		
+		local ao = Instance.new("AlignOrientation", hrp)
+		ao.Attachment0 = hrp.RootAttachment
+		ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+		ao.RigidityEnabled = true
+		
+		ap.Position = hrp.Position
+		ao.CFrame = hrp.CFrame
+		
+		ap.Name = "Fly"
+		ao.Name = "Fly"
+		
+		bindflykeybinds(ap, ao)
+	elseif info[1] == "unfly" then
+		unbindflykeybinds()
+	elseif info[1] == "mute" then
+		StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, false)
+	elseif info[1] == "unmute" then
+		StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, true)
+	end
+end)
+
+--OBJECT STORAGE MODULE
+
+local module = {}
+
+module.Players = {}
+module.Jails = {}
+
+return module
+
+--GARBAGECOLECTOR
+
+local module = {}
+
+function module.clean(obj)
+	if type(obj) == "table" then
+		if obj.Connections then
+			for _,con in obj.Connections do
+				if con then
+					con:Disconnect()
+					con = nil
+				end
+			end
+		end
+		
+		for k, v in pairs(obj) do
+			-- If the value has a Destroy method, call it
+			if type(v) == "table" and type(v.Destroy) == "function" then
+				v:Destroy()
+			end
+			obj[k] = nil
+		end
+		
+		print("GARBAGE COLLECTED OBJECT")
+	end
+end
+
+return module
