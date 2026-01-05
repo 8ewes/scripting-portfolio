@@ -1,0 +1,335 @@
+--MODULE SCRIPTS FOR CREATING A GUN OBJECT ON CLIENT SIDE
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local gun ={}
+gun.__index = gun
+
+local gre = ReplicatedStorage.RemoteEvents:WaitForChild("Gun")
+local GunStats = require(ReplicatedStorage.Modules.GunStats)
+
+local plr = game.Players.LocalPlayer
+
+local ContextActionService = game:GetService("ContextActionService")
+local GarbageCollector = require(ReplicatedStorage.Modules.GarbageCollector) -- my own garbage collector that can clean objects with GarbageColector.clean(obj)
+local UserInputService = game:GetService("UserInputService")
+
+
+local cam = workspace.CurrentCamera
+local TweenService = game:GetService("TweenService")
+local CursorLibrary = require(ReplicatedStorage.Modules.CursorLibrary)
+
+local mousegui = game.Players.LocalPlayer.PlayerGui:WaitForChild("MouseGui")
+local mouseimage = mousegui:WaitForChild("MouseImage")
+
+function gun.new(tool) -- constructor for tool
+	assert(tool)
+	local self = setmetatable({}, gun)
+	self.Tool = tool
+	self.Connections = {} -- garbage collector disconnects all connections in here when cleaning
+	
+	self.Stats = GunStats[tool.Name] :: GunStats.gunstat
+	
+	self.Ammo = self.Stats.MaxAmmo
+
+	self.Mousedown = false
+	self.Deb = true
+	self.Zoomed = false
+	
+	self.Gui = self.Stats.GunGui:Clone() -- tools gungui when pulled out
+	self.Gui.Parent = self.Tool
+	
+	self.Equipped = false
+	
+	local char = game.Players.LocalPlayer.Character
+	local animator = char:FindFirstChildWhichIsA("Animator", true)
+	self.Tracks = { --animation tracks for guns, play depending on action it linked to
+		Run = animator:LoadAnimation(self.Stats.GunRunAnim),
+		Shoot = animator:LoadAnimation(self.Stats.GunShootAnim),
+		Hold = animator:LoadAnimation(self.Stats.GunHoldAnim),
+	}
+	
+	self.MouseCon = nil
+	table.insert(self.Connections, self.MouseCon) -- add connection to connections so we can disconnect when we cleanup object
+	
+	table.insert(self.Connections, self.Tool.Equipped:Connect(function()
+		self.Equipped = true
+		UserInputService.MouseIconEnabled = false
+		local chosenmouse = ReplicatedStorage.BindableFunctions.Setting:Invoke("GetMouse")
+		
+		for name,info in CursorLibrary do
+			if info.Id == chosenmouse.Id then
+				break
+			end
+		end
+		
+		--grabs character's mouse image from CursorLibrary and sets it to player's mouse image
+		--you can set the mouse image in settings when pressing "M" in game
+		mouseimage.Image = chosenmouse.Id
+		mouseimage.Size = chosenmouse.Size
+		
+		if self.MouseCon then
+			self.MouseCon:Disconnect()
+			self.MouseCon = nil
+		end
+		self.MouseCon = UserInputService.InputChanged:Connect(function(input, proc)
+			if input.UserInputType == Enum.UserInputType.MouseMovement then
+				mouseimage.Position = UDim2.fromOffset(input.Position.X, input.Position.Y + 59.5) --make sure the mouse image is accurate to where the mouse is
+			end
+		end)
+		
+		mousegui.Enabled = true -- enable custom shooter mouse image
+
+		
+		--below is some really obvious statements no need to explain, just update animations and implement gun gui
+		self:updategui()
+		self.Gui.Parent = game.Players.LocalPlayer.PlayerGui
+		
+		self:animategui(true)
+		
+		if game.Players.LocalPlayer.Character:GetAttribute("Running") then
+			self.Tracks.Run:Play()
+		else
+			self.Tracks.Hold:Play()
+		end
+		
+		
+		ContextActionService:BindAction("Reload", function(name, state, obj)
+			if state == Enum.UserInputState.Begin then
+				if self.Ammo >= self.Stats.MaxAmmo then
+					return
+				end
+				
+				self.Mousedown = false
+				self.Deb = false
+				task.delay(.1, function() --task delay wait so the player cant shoot instantly after reloading
+					self.Deb = true
+				end)
+				
+				self:reload()
+				self:updategui()
+			end
+		end, true, Enum.KeyCode.R)
+		
+		ContextActionService:BindAction("Activate", function(name, state, obj)
+			if state == Enum.UserInputState.Begin then
+				self.Mousedown = true
+
+				if not self.Deb then return end
+				self.Deb = false
+
+				local litup = false				
+				
+				while self.Mousedown do
+					if self.Ammo <= 0 then
+						self:reload()
+						self:updategui()
+						break
+					elseif self.Ammo > 0 then
+						if self.Stats.Type == "Medic" then
+							local lastdist = 10000
+							local targetchar = nil
+							
+							
+							--this commented out version of grabbing closest character is used for only healing players, not npcs AND players
+							
+							--for _,oplr in game.Players:GetPlayers() do
+							--	if oplr.Team == game.Players.LocalPlayer.Team and oplr.Character then
+							--		local ochar = oplr.Character
+							--		local ohrp = ochar:WaitForChild("HumanoidRootPart")
+							--		local ohum = ochar:WaitForChild("Humanoid")
+									
+							--		if ohum.Health > 0 and ohum.Health < ohum.MaxHealth then
+										
+							--			local dist = (ohrp.Position - game.Players.LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+							--			if dist < lastdist then
+							--				lastdist = dist
+							--				targetchar = ochar
+							--			end
+										
+							--		end
+							--	end
+							--end
+							
+							--below grabs the closest character to heal
+							
+							for _,ochar in workspace:GetDescendants() do
+								if ochar:FindFirstChild("Humanoid") and ochar ~= game.Players.LocalPlayer.Character then
+									
+									--local ochar = oplr.Character
+									local ohrp = ochar:WaitForChild("HumanoidRootPart")
+									local ohum = ochar:WaitForChild("Humanoid")
+
+									if ohum.Health > 0 and ohum.Health < ohum.MaxHealth then
+
+										local dist = (ohrp.Position - game.Players.LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+										if dist < lastdist then
+											lastdist = dist
+											targetchar = ochar
+										end
+
+									end
+								end
+							end
+
+							if targetchar then
+								local hrp = game.Players.LocalPlayer.Character.HumanoidRootPart
+
+								local rcp = RaycastParams.new()
+								rcp.FilterDescendantsInstances = {hrp.Parent}
+								rcp.FilterType = Enum.RaycastFilterType.Exclude
+								--creates ray for detect who we hit
+								local ray = workspace:Raycast(hrp.Position, (targetchar.HumanoidRootPart.Position - hrp.Position).Unit * 3000,  rcp)
+
+								if ray and ray.Instance:IsDescendantOf(targetchar) then
+									self.Ammo -= 1
+									if not litup then -- prevents gun from creating multiple lights and overlapping
+										litup = true
+										gre:FireServer("Light", true, self.Tool, self.Stats) -- gun lights up (effects for shooting)
+									end
+									gre:FireServer("Emit", self.Tool, self.Stats) -- gun emits particle emitters (effects for shooting)
+									self.Tracks.Shoot:Play() -- play shoot animation
+									gre:FireServer("Fire", self.Tool, targetchar.HumanoidRootPart.CFrame, self.Stats) -- send to server that we are firing the gun
+									--send the event name, gun thats shooting, the cframe to shoot it towards, and stats of the gun
+									--we are pointing to the targetchar's hrp cframe because the medic gun autoshoots
+								end
+							end
+							
+						elseif self.Stats.Type == "Normal" then
+							--for normal guns, not medic guns,  laser shooting guns
+							self.Ammo -= 1
+							if not litup then -- prevents gun from creating multiple lights and overlapping
+								litup = true
+								gre:FireServer("Light", true, self.Tool, self.Stats) -- gun lights up (effects for shooting)
+							end
+							gre:FireServer("Emit", self.Tool, self.Stats) -- gun emits particle emitters (effects for shooting)
+							self.Tracks.Shoot:Play()-- play shoot animation
+							gre:FireServer("Fire", self.Tool, plr:GetMouse().Hit, self.Stats) -- send to server that we are firing the gun
+							--send the event name, gun thats shooting, the cframe to shoot it towards, and stats of the gun
+						end
+						ReplicatedStorage.BindableEvents.Gun:Fire("AmmoChange") -- update other universal gun gui on client side
+						ReplicatedStorage.BindableEvents.Keybind:Fire("BreakSprint") -- preventing sprinting while shooting
+						--ReplicatedStorage.BindableEvents.Keybind:Fire("BreakCrouch") -- prevent crouching while shooting (OPTIONAL)
+						self:updategui()
+					end
+					task.wait(self.Stats.ShootIntervalTime)
+				end
+				gre:FireServer("Light", false, self.Tool, self.Stats)
+				
+				self.Deb = true
+			elseif state == Enum.UserInputState.End then
+				self.Mousedown = false
+			end
+		end, false, Enum.KeyCode.MouseLeftButton, Enum.UserInputType.MouseButton1)
+
+		ContextActionService:BindAction("Zoom", function(name, state, obj)
+			if state == Enum.UserInputState.Begin then
+				self.Zoomed = not self.Zoomed
+				self:zoom(self.Zoomed)
+			end
+		end, true, ReplicatedStorage.BindableFunctions.Setting:Invoke("GetZoom")) 
+	end))
+	
+	table.insert(self.Connections, self.Tool.Unequipped:Connect(function()
+		--disconnect custom shoot mouse image
+		mousegui.Enabled = false
+		UserInputService.MouseIconEnabled = true
+		
+		self.Equipped = false
+		self.Mousedown = false
+		
+		if self.MouseCon then
+			self.MouseCon:Disconnect()
+			self.MouseCon = nil
+		end
+		
+		if not game.Players.LocalPlayer.Character:FindFirstChildWhichIsA("Tool") then
+			self:animategui(false)
+			task.delay(.5, function()
+				if not self.Equipped then
+					self.Gui.Parent = self.Tool
+				end
+			end)
+		else
+			self.Gui.Parent = self.Tool
+		end
+		
+		for _,v in self.Tracks do
+			v:Stop()
+		end
+		
+		self.Zoomed = false
+		self:zoom(false)
+		
+		ContextActionService:UnbindAction("Activate")
+		ContextActionService:UnbindAction("Zoom")
+	end))
+
+	
+	return self
+end
+
+function gun:updategui()
+	--update the bar based on the ammo %
+	TweenService:Create(self.Gui.BarFrame.Fill, TweenInfo.new(.1, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {Size = UDim2.fromScale(self.Ammo/self.Stats.MaxAmmo,1)}):Play()
+end
+
+function gun:animategui(boolin : boolean)
+	local ti = TweenInfo.new(.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+	local totween = {}
+	
+	if boolin then
+		--animate it entering
+		totween[self.Gui.BarFrame] = {BackgroundTransparency = 0}
+		totween[self.Gui.BarFrame.Fill] = {Transparency = 0}
+	elseif not boolin then
+		--animate it exiting
+		totween[self.Gui.BarFrame] = {BackgroundTransparency = 1}
+		totween[self.Gui.BarFrame.Fill] = {Transparency = 1}
+	end
+
+	for uielement,goal in totween do
+		--simple tweening for clean ui animation
+		TweenService:Create(uielement, ti, goal):Play()
+	end
+end
+
+function gun:reload()
+	--reload gun
+	self.Ammo = self.Stats.MaxAmmo
+	gre:FireServer("Reload", self.Tool, self.Stats)
+	ReplicatedStorage.BindableEvents.Gun:Fire("AmmoChange", self.Ammo)
+end
+
+function gun:switchidleanims(bool : boolean)
+	--changes idle animation of holding gun depending on if youre running or walking
+	if bool then
+		self.Tracks.Hold:Stop()
+		self.Tracks.Run:Play()
+	else
+		self.Tracks.Hold:Play()
+		self.Tracks.Run:Stop()
+	end
+end
+
+function gun:zoom(bool)
+	--aiming the gun by lowering fov
+	if bool then
+		TweenService:Create(cam, TweenInfo.new(.75, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {FieldOfView = 40}):Play()
+	else
+		TweenService:Create(cam, TweenInfo.new(.75, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {FieldOfView = 70}):Play()
+	end
+end
+
+function gun:destroy()
+	--garbage collect, disconnect keybinds, and remove gui, and more
+	self.Gui.Parent = self.Tool
+	ContextActionService:UnbindAction("Activate")
+	ContextActionService:UnbindAction("Zoom")
+	ContextActionService:UnbindAction("Reload")
+	self:zoom(false)
+	GarbageCollector.clean(self)
+end
+
+
+return gun :: typeof(gun)
